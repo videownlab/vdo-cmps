@@ -54,7 +54,7 @@ func (t *MockedRelayHandler) Relay() (retErr error) {
 			EmitStep(t, _ABORT_STEP, retErr)
 		} else {
 			EmitStep(t, _FINISH_STEP)
-			cleanChunks(t.fsm.OutputDir)
+			cleanChunks(t.fsm.HomeDir())
 		}
 	}()
 

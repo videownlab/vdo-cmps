@@ -8,10 +8,10 @@ import (
 	"vdo-cmps/pkg/cesstash/shim/segment"
 	"vdo-cmps/pkg/utils/hash"
 
-	"github.com/AstaFrode/go-libp2p/core/peer"
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
 	"github.com/centrifuge/go-substrate-rpc-client/v4/types"
 	"github.com/go-logr/logr"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 type UploadReq struct {

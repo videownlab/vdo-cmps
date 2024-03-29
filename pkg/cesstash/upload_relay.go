@@ -1,14 +1,17 @@
 package cesstash
 
 import (
+	"math"
 	"math/rand"
 	"os"
 	"time"
+	"vdo-cmps/pkg/cesstash/shim"
 	"vdo-cmps/pkg/cesstash/shim/segment"
 
-	"github.com/AstaFrode/go-libp2p/core/peer"
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/pkg/errors"
+	"github.com/vedhavyas/go-subkey/v2"
 	"golang.org/x/exp/slices"
 )
 
@@ -45,7 +48,7 @@ func (t *SimpleRelayHandler) Relay() (retErr error) {
 			EmitStep(t, _ABORT_STEP, retErr)
 		} else {
 			EmitStep(t, _FINISH_STEP)
-			cleanChunks(t.fsm.OutputDir)
+			cleanChunks(t.fsm.HomeDir())
 		}
 	}()
 
@@ -101,103 +104,166 @@ func cleanChunks(chunkDir string) {
 	}
 }
 
-type LoopCtrlAction uint8
-
-const (
-	NONE LoopCtrlAction = iota
-	RESTART
-	FINISH
-)
-
 func (t *SimpleRelayHandler) upload(fsm *segment.FileSegmentMeta) error {
 	if len(fsm.Segments) == 0 {
 		return errors.New("the fsm fragments empty")
 	}
 
-	cessFileId := fsm.RootHash.Hex()
 	cessc := t.fileStash.cessc
 	cessfsc := t.fileStash.cessfsc
 	log := t.log
+	cessFileId := fsm.RootHash.Hex()
+	frag2dArray := fsm.ToFragSeg2dArray()
 
-	for {
-		fmd, err := cessc.QueryFileMetadata(cessFileId)
-		log.V(1).Info("got FileMetaData", "fmd", fmd, "err", err)
-		if err == nil {
-			// the same cessFileId file is already on chain
-			for _, v := range fmd.Owner {
-				if t.accountId == v.User {
-					// the user has already upload the file before
-					EmitStep(t, "thunder", map[string]any{"alreadyUploaded": true})
-					return nil
+	usedMiners := make(map[peer.ID]struct{}, segment.FRAG_SHARD_SIZE)
+	minerPeers := make([]peer.ID, 0)
+	var pickMiner = func() peer.ID {
+		noAvailableMiner := false
+		for {
+			if len(minerPeers) == 0 || noAvailableMiner {
+				minerPeers = cessfsc.GetConnectedPeers()
+				if len(minerPeers) > 0 {
+					rand.Shuffle(len(minerPeers), func(i, j int) { minerPeers[i], minerPeers[j] = minerPeers[j], minerPeers[i] })
 				}
+				log.V(1).Info("no available miner, 5 second later fetch again")
+				time.Sleep(5 * time.Second)
+				continue
 			}
-			// only record the relationship
-			txn, err := t.Declaration(fsm, false)
+			for i, peerId := range minerPeers {
+				if _, ok := usedMiners[peerId]; ok {
+					continue
+				}
+				usedMiners[peerId] = struct{}{}
+				minerPeers = slices.Delete(minerPeers, i, i)
+				return peerId
+			}
+			noAvailableMiner = true
+		}
+	}
+
+	hasDeclared := false
+	for {
+		for i := 0; i < math.MaxInt; i++ {
+			fmd, err := cessc.QueryFileMetadata(cessFileId)
 			if err != nil {
-				return errors.Wrapf(err, "cessc.UploadDeclaration()")
+				if err.Error() != cesspat.ERR_Empty {
+					log.Error(err, "[QueryFileMetadata] failed, try again later")
+					time.Sleep(1500 * time.Millisecond)
+					continue
+				}
+				// new file to store
+				log.Info("new file to store", "uploador", subkey.SS58Encode(t.accountId[:], 11330)) //TODO: use configed value
+				break
+			} else {
+				log.Info("the file has stored on chain")
+				for _, v := range fmd.Owner {
+					if t.accountId == v.User {
+						// the user has already stored the file before
+						EmitStep(t, "thunder", map[string]any{"alreadyStored": true})
+						return nil
+					}
+				}
+				if !hasDeclared {
+					// only record the relationship
+					blockHash, err := t.Declaration(fsm, false)
+					if err != nil {
+						return errors.Wrapf(err, "[Declaration]")
+					}
+					EmitStep(t, "thunder", map[string]any{"blockHash": blockHash})
+				}
+				return nil
 			}
-			EmitStep(t, "thunder", map[string]any{"txn": txn})
-			return nil
 		}
 
+		fragStripOnChainMap := t.createFileStorageOrderIfAbsent(fsm, usedMiners)
+		hasDeclared = true
+
+		//TODO: Parallel uploading of data
+		for i, fragStrip := range frag2dArray {
+			if _, ok := fragStripOnChainMap[i]; ok {
+				// this index fragStrip has been on chain, skip it
+				continue
+			}
+		A_FRAG_STRIP:
+			log.V(1).Info("connected miners count", "minerSize", len(minerPeers))
+			minerPeerId := pickMiner()
+			nestLog := log.WithValues("minerPeer", minerPeerId, "fragIndex", i)
+			for j, frag := range fragStrip {
+				nestLog := nestLog.WithValues("frag", frag, "segIndex", j)
+				retry := 0
+				for {
+					nestLog.V(1).Info("frag uploading", "retry", retry)
+					if err := cessfsc.WriteFileAction(minerPeerId, cessFileId, frag.FilePath()); err != nil {
+						if err.Error() != "no addresses" {
+							nestLog.Error(err, "[WriteFileAction] error, try again later", "retry", retry)
+							if retry < 3 {
+								time.Sleep(700 * time.Millisecond)
+								retry++
+								continue
+							}
+						}
+						nestLog.Error(err, "[WriteFileAction] error, change to next miner")
+						cessfsc.ReportNotAvailable(minerPeerId)
+						goto A_FRAG_STRIP // one strip one miner
+					}
+					nestLog.V(1).Info("frag uploaded")
+					break
+				}
+
+			}
+		}
+	}
+}
+
+func (t *SimpleRelayHandler) createFileStorageOrderIfAbsent(fsm *segment.FileSegmentMeta, usedMiners map[peer.ID]struct{}) (fragStripOnChainMap map[int]peer.ID) {
+	cessFileId := fsm.RootHash.Hex()
+	cessc := t.fileStash.cessc
+	log := t.log
+	fragStripOnChainMap = make(map[int]peer.ID)
+	for i := 0; i < math.MaxInt; i++ {
 		storageOrder, err := cessc.QueryStorageOrder(cessFileId)
 		if err != nil {
 			if err.Error() == cesspat.ERR_Empty {
-				txn, err := t.Declaration(fsm, true)
-				if err != nil {
-					return errors.Wrapf(err, "cessc.UploadDeclaration()")
-				}
-				EmitStep(t, "upload declared", map[string]any{"txn": txn})
-			}
-			// } else if storageOrder.User.User == t.account {
-			// 	EmitStep(t.se, "thunder")
-			// 	return nil
-		}
-
-		t.log.V(1).Info("storage order detail", "storageOrder", storageOrder)
-
-		usedMiners := make(map[peer.ID]struct{}, segment.FRAG_SHARD_SIZE)
-		minerPeers := make([]peer.ID, 0)
-
-		var pickMiner = func() peer.ID {
-			noAvailableMiner := false
-			for {
-				if len(minerPeers) == 0 || noAvailableMiner {
-					minerPeers = cessfsc.GetConnectedPeers()
-					if len(minerPeers) > 0 {
-						rand.Shuffle(len(minerPeers), func(i, j int) { minerPeers[i], minerPeers[j] = minerPeers[j], minerPeers[i] })
-					}
-					log.V(1).Info("no available miner, 5 second later fetch again")
-					time.Sleep(5 * time.Second)
-					continue
-				}
-				for i, peerId := range minerPeers {
-					if _, ok := usedMiners[peerId]; ok {
+				// new file storage order
+				for j := 0; j < math.MaxInt; j++ {
+					blockHash, err := t.Declaration(fsm, true)
+					if err != nil {
+						log.Error(err, "[Declaration] failed, try again later")
+						time.Sleep(1500 * time.Millisecond)
 						continue
 					}
+					t.log.Info("new file storage order", "blockHash", blockHash)
+					EmitStep(t, "upload declared", map[string]any{"blockHash": blockHash})
+					return
+				}
+			} else {
+				log.Error(err, "[QueryStorageOrder] failed, try again later")
+				time.Sleep(1500 * time.Millisecond)
+				continue
+			}
+		} else {
+			t.log.V(1).Info("storage completes", "storageCompletes", storageOrder.CompleteList)
+			for _, e := range storageOrder.CompleteList {
+				for j := 0; j < math.MaxInt; j++ {
+					minerInfo, err := cessc.QueryStorageMiner(e.Miner[:])
+					if err != nil {
+						log.Error(err, "[QueryStorageMiner] failed, try again later")
+						time.Sleep(1500 * time.Millisecond)
+						continue
+					}
+					peerId, err := shim.ToPeerId(&minerInfo.PeerId)
+					if err != nil {
+						log.Error(err, "convert peerId error, skip it", "minerPeerId", minerInfo.PeerId)
+						break
+					}
+					// the Index that define on chain is started from 1
+					fragStripOnChainMap[int(e.Index)-1] = peerId
 					usedMiners[peerId] = struct{}{}
-					minerPeers = slices.Delete(minerPeers, i, i)
-					return peerId
+					break
 				}
-				noAvailableMiner = true
 			}
+			break
 		}
-
-		for _, fragStrip := range fsm.ToFragSeg2dArray() {
-		A_FRAG_STRIP:
-			minerPeerId := pickMiner()
-			for _, frag := range fragStrip {
-				if err := cessfsc.WriteFileAction(minerPeerId, cessFileId, frag.FilePath); err != nil {
-					if err.Error() != "no addresses" {
-						log.Error(err, "WriteFileAction() error, try again later", "frag", frag, "minerPeerId", minerPeerId)
-					} // only log none "no addresses" error
-					//TODO: retry again
-					goto A_FRAG_STRIP // one strip one miner
-				}
-
-			}
-		}
-		break
 	}
-	return nil
+	return
 }

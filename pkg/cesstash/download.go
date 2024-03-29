@@ -13,11 +13,11 @@ import (
 	"vdo-cmps/pkg/utils/erasure"
 	"vdo-cmps/pkg/utils/hash"
 
-	"github.com/AstaFrode/go-libp2p/core/peer"
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
 	cessdk "github.com/CESSProject/cess-go-sdk/core/sdk"
 	"github.com/centrifuge/go-substrate-rpc-client/v4/types"
 	"github.com/go-logr/logr"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"golang.org/x/exp/slices"
 
 	"github.com/pkg/errors"
@@ -198,7 +198,7 @@ func (t *Downloader) downloadFragsByPeer(peerId peer.ID, fragInfos []FragmentInf
 	cessfsc := t.cessfsc
 	rounds := 0
 	for {
-		addrInfo, e := cessfsc.DHTFindPeer(peerId.String())
+		addrInfo, e := cessfsc.FindPeer(peerId)
 		if e != nil {
 			log.Error(e, "finding address error")
 			rounds++
@@ -206,7 +206,7 @@ func (t *Downloader) downloadFragsByPeer(peerId peer.ID, fragInfos []FragmentInf
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		if err := cessfsc.Connect(cessfsc.GetCtxQueryFromCtxCancel(), addrInfo); err != nil {
+		if err := cessfsc.Connect(cessfsc.Context(), addrInfo); err != nil {
 			log.Error(err, "connect peer error")
 		}
 		log.V(1).Info("peer connected ", "address", addrInfo)

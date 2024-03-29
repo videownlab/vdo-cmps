@@ -19,12 +19,12 @@ func (t *CessStash) createFsm(file FileHeader, outputDir string) (*segment.FileS
 		return nil, err
 	}
 	defer toUploadFile.Close()
-	fsmHome, err := os.MkdirTemp(outputDir, "fsm_tmp_*")
+	tmpFsmHome, err := os.MkdirTemp(outputDir, "fsm_tmp_*")
 	if err != nil {
 		return nil, err
 	}
 
-	fsm, err := segment.CreateByStream(toUploadFile, file.Size(), fsmHome)
+	fsm, err := segment.CreateByStream(toUploadFile, file.Size(), tmpFsmHome)
 	if err != nil {
 		return nil, errors.Wrap(err, "shard file error")
 	}
@@ -34,13 +34,13 @@ func (t *CessStash) createFsm(file FileHeader, outputDir string) (*segment.FileS
 	fstat, _ := os.Stat(normalizeDir)
 	// the same cessFileId file exist
 	if fstat != nil {
-		fsm.OutputDir = normalizeDir
-		os.RemoveAll(fsmHome)
+		fsm.ChangeHomeDir(normalizeDir)
+		os.RemoveAll(tmpFsmHome)
 		return fsm, nil
 	}
 
-	if err := os.Rename(fsmHome, normalizeDir); err == nil {
-		fsm.OutputDir = normalizeDir
+	if err := os.Rename(tmpFsmHome, normalizeDir); err == nil {
+		fsm.ChangeHomeDir(normalizeDir)
 	} else {
 		t.log.Error(err, "rename fsm dir error")
 	}
@@ -66,8 +66,8 @@ func (t *CessStash) Upload(req UploadReq) (RelayHandler, error) {
 	cessFileId := *fsm.RootHash
 	rh := t.relayHandlers[cessFileId]
 	if rh == nil {
-		// drh := NewSimpleRelayHandler(t, fsm, req)
-		drh := NewMockedRelayHandler(t, fsm, req)
+		drh := NewSimpleRelayHandler(t, fsm, req)
+		// drh := NewMockedRelayHandler(t, fsm, req)
 		t.log.V(1).Info("allot relay handler", "cessFileId", cessFileId)
 		rh = &drh
 		t.relayHandlers[cessFileId] = rh
