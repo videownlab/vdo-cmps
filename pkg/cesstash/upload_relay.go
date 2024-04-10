@@ -4,11 +4,14 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"strings"
+	"sync"
 	"time"
 	"vdo-cmps/pkg/cesstash/shim"
 	"vdo-cmps/pkg/cesstash/shim/segment"
 
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
+	"github.com/go-logr/logr"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/pkg/errors"
 	"github.com/vedhavyas/go-subkey/v2"
@@ -117,7 +120,11 @@ func (t *SimpleRelayHandler) upload(fsm *segment.FileSegmentMeta) error {
 
 	usedMiners := make(map[peer.ID]struct{}, segment.FRAG_SHARD_SIZE)
 	minerPeers := make([]peer.ID, 0)
+	mu := sync.Mutex{}
 	var pickMiner = func() peer.ID {
+		mu.Lock()
+		defer mu.Unlock()
+		log.V(1).Info("connected miners count", "minerSize", len(minerPeers))
 		noAvailableMiner := false
 		for {
 			if len(minerPeers) == 0 || noAvailableMiner {
@@ -178,40 +185,49 @@ func (t *SimpleRelayHandler) upload(fsm *segment.FileSegmentMeta) error {
 		fragStripOnChainMap := t.createFileStorageOrderIfAbsent(fsm, usedMiners)
 		hasDeclared = true
 
-		//TODO: Parallel uploading of data
-		for i, fragStrip := range frag2dArray {
-			if _, ok := fragStripOnChainMap[i]; ok {
-				// this index fragStrip has been on chain, skip it
-				continue
-			}
-		A_FRAG_STRIP:
-			log.V(1).Info("connected miners count", "minerSize", len(minerPeers))
-			minerPeerId := pickMiner()
-			nestLog := log.WithValues("minerPeer", minerPeerId, "fragIndex", i)
-			for j, frag := range fragStrip {
-				nestLog := nestLog.WithValues("frag", frag, "segIndex", j)
-				retry := 0
-				for {
-					nestLog.V(1).Info("frag uploading", "retry", retry)
-					if err := cessfsc.WriteFileAction(minerPeerId, cessFileId, frag.FilePath()); err != nil {
-						if err.Error() != "no addresses" {
-							nestLog.Error(err, "[WriteFileAction] error, try again later", "retry", retry)
-							if retry < 3 {
-								time.Sleep(700 * time.Millisecond)
-								retry++
-								continue
-							}
-						}
-						nestLog.Error(err, "[WriteFileAction] error, change to next miner")
-						cessfsc.ReportNotAvailable(minerPeerId)
-						goto A_FRAG_STRIP // one strip one miner
-					}
-					nestLog.V(1).Info("frag uploaded")
-					break
+		var uploadFragStrip = func(fragStripIndex int, fragStrip []segment.Fragment, wg *sync.WaitGroup, nestLog logr.Logger) {
+			defer wg.Done()
+			for {
+				if _, ok := fragStripOnChainMap[fragStripIndex]; ok {
+					// this index fragStrip has been on chain, skip it
+					return
 				}
+			RE_PICK_A_MINER_FOR_A_FRAG_STRIP:
+				minerPeerId := pickMiner()
+				nestLog := nestLog.WithValues("minerPeer", minerPeerId, "fragStripIndex", fragStripIndex, "segLength", len(fragStrip))
+				for j, frag := range fragStrip {
+					nestLog := nestLog.WithValues("frag", frag, "segIndex", j)
+					retry := 0
+					for {
+						nestLog.V(1).Info("frag uploading", "retry", retry)
+						if err := cessfsc.WriteFileAction(minerPeerId, cessFileId, frag.FilePath()); err != nil {
+							if !strings.Contains(err.Error(), "no addresses") {
+								nestLog.Error(err, "[WriteFileAction] error, try again later", "retry", retry)
+								if retry < 2 {
+									time.Sleep(700 * time.Millisecond)
+									retry++
+									continue
+								}
+							}
+							nestLog.Error(err, "[WriteFileAction] error, change to next miner")
+							cessfsc.ReportNotAvailable(minerPeerId)
+							goto RE_PICK_A_MINER_FOR_A_FRAG_STRIP
+						}
+						nestLog.V(1).Info("frag uploaded")
+						break
+					}
 
+				}
 			}
 		}
+
+		var wg sync.WaitGroup
+		// Parallel uploading for each frag strip
+		for i := range frag2dArray {
+			wg.Add(1)
+			go uploadFragStrip(i, frag2dArray[i], &wg, log)
+		}
+		wg.Wait()
 	}
 }
 
@@ -229,7 +245,16 @@ func (t *SimpleRelayHandler) createFileStorageOrderIfAbsent(fsm *segment.FileSeg
 					blockHash, err := t.Declaration(fsm, true)
 					if err != nil {
 						log.Error(err, "[Declaration] failed, try again later")
-						time.Sleep(1500 * time.Millisecond)
+						if strings.Contains(err.Error(), "rpc err: connection failed") {
+							err = cessc.ReconnectRPC() //FIXME: the cess sdk make the state false once catch rpc error
+							if err != nil {
+								log.Error(err, "[ReconnectRPC] failed, try again later")
+								time.Sleep(1500 * time.Millisecond)
+								continue
+							}
+						} else {
+							time.Sleep(1500 * time.Millisecond)
+						}
 						continue
 					}
 					t.log.Info("new file storage order", "blockHash", blockHash)

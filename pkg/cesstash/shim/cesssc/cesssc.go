@@ -104,7 +104,7 @@ func New(listenPort uint16, workDir string, configedBootAddrs []string, log logr
 		ctx:             ctx,
 		log:             log,
 		peerStates:      &sync.Map{},
-		maxPeerKeepSize: 160,
+		maxPeerKeepSize: 200,
 	}
 	p2pm.P2P = c
 	go func() {
