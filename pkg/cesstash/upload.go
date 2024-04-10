@@ -10,6 +10,9 @@ import (
 
 	"vdo-cmps/pkg/cesstash/shim/segment"
 
+	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
+	"github.com/centrifuge/go-substrate-rpc-client/v4/types"
+
 	"github.com/pkg/errors"
 )
 
@@ -58,7 +61,24 @@ func (t *CessStash) createFsm(file FileHeader, outputDir string) (*segment.FileS
 	return fsm, nil
 }
 
+func checkHasAuthorizeToMe(ct *CessStash, acc types.AccountID) error {
+	authTargets, err := ct.cessc.QueryAuthorizedAccounts(acc[:])
+	if err != nil && err.Error() != cesspat.ERR_Empty {
+		return errors.New("must to authorize to use your space first")
+	}
+	ka := ct.cessc.GetSignatureAcc()
+	for _, at := range authTargets {
+		if ka == at {
+			return nil
+		}
+	}
+	return errors.Errorf("please authorize to %s to use your space", ka)
+}
+
 func (t *CessStash) Upload(req UploadReq) (RelayHandler, error) {
+	if err := checkHasAuthorizeToMe(t, req.AccountId); err != nil {
+		return nil, err
+	}
 	fsm, err := t.createFsm(req.FileHeader, t.chunksDir)
 	if err != nil {
 		return nil, err
