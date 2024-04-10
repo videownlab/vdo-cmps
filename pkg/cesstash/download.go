@@ -14,7 +14,6 @@ import (
 	"vdo-cmps/pkg/utils/hash"
 
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
-	cessdk "github.com/CESSProject/cess-go-sdk/core/sdk"
 	"github.com/centrifuge/go-substrate-rpc-client/v4/types"
 	"github.com/go-logr/logr"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -72,7 +71,7 @@ type fragmentGot struct {
 }
 
 type Downloader struct {
-	cessc          cessdk.SDK
+	cessc          CesSdkAdapter
 	cessfsc        *cesssc.CessStorageClient
 	log            logr.Logger
 	cessFileId     string
@@ -96,7 +95,7 @@ func newDownloader(
 	fmeta *cesspat.FileMetadata,
 	downloadDir string, targetFile *os.File,
 	log logr.Logger,
-	cessc cessdk.SDK,
+	cessc CesSdkAdapter,
 	cessfsc *cesssc.CessStorageClient) (*Downloader, error) {
 
 	log = log.WithValues("cessFileId", cessFileId)

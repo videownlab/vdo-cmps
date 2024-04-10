@@ -4,7 +4,6 @@ go 1.20
 
 require (
 	github.com/CESSProject/cess-go-sdk v0.5.0
-	github.com/CESSProject/go-keyring v0.0.0-20220614131247-ee3a8da30fde
 	github.com/CESSProject/p2p-go v0.3.4
 	github.com/btcsuite/btcutil v1.0.3-0.20201208143702-a53e38424cce
 	github.com/cbergoon/merkletree v0.2.0
@@ -25,10 +24,10 @@ require (
 	github.com/vedhavyas/go-subkey/v2 v2.0.0
 	golang.org/x/crypto v0.19.0
 	golang.org/x/exp v0.0.0-20240213143201-ec583247a57a
-	golang.org/x/time v0.1.0
 )
 
 require (
+	github.com/CESSProject/go-keyring v0.0.0-20220614131247-ee3a8da30fde // indirect
 	github.com/ChainSafe/go-schnorrkel v1.0.0 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect

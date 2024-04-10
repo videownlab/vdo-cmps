@@ -49,6 +49,11 @@ func NewSimpleRelayHandler(fileStash *CessStash, fsm *segment.FileSegmentMeta, u
 
 func (t *SimpleRelayHandler) Relay() (retErr error) {
 	defer func() {
+		if r := recover(); r != nil {
+			err := r.(error)
+			fmt.Printf("%+v\n", err)
+			retErr = err
+		}
 		if retErr != nil {
 			EmitStep(t, _ABORT_STEP, retErr)
 		} else {
@@ -64,11 +69,7 @@ func (t *SimpleRelayHandler) Relay() (retErr error) {
 
 	EmitStep(t, "uploading")
 	t.log.V(1).Info("the fsm", "fsm", t.fsm)
-	if err := t.upload(t.fsm); err != nil {
-		return err
-	}
-
-	return nil
+	return t.upload(t.fsm)
 }
 
 func (t *SimpleRelayHandler) ReRelayIfAbort() bool {
@@ -215,11 +216,13 @@ func (t *SimpleRelayHandler) upload(fsm *segment.FileSegmentMeta) error {
 					retry := 0
 					for {
 						nestLog.V(1).Info("frag uploading", "retry", retry)
+						EmitStep(t, "frag strip uploading", "fragStripIndex", fragStripIndex, "minerPeer", minerPeerId)
 						if err := cessfsc.WriteFileAction(minerPeerId, cessFileId, frag.FilePath()); err != nil {
 							nestLog.Error(err, "[WriteFileAction] error, change to next miner")
 							cessfsc.ReportNotAvailable(minerPeerId)
 						} else {
 							nestLog.V(1).Info("frag uploaded, wait for complete")
+							EmitStep(t, "frag strip uploading", "fragStripIndex", fragStripIndex, "minerPeer", minerPeerId)
 							lastUploadedTime = time.Now()
 						}
 						goto LOOP_0
@@ -239,6 +242,7 @@ func (t *SimpleRelayHandler) upload(fsm *segment.FileSegmentMeta) error {
 			peerId, err := shim.ToPeerId(&m.PeerId)
 			if err == nil {
 				log.V(1).Info("frag strip has already completed, ignore upload", "fragStripIndex", i, "minerPeer", peerId)
+				EmitStep(t, "frag strip has already completed, ignore upload", "fragStripIndex", i, "minerPeer", peerId)
 				usedMiners[peerId] = struct{}{}
 				continue
 			}
@@ -253,7 +257,9 @@ func (t *SimpleRelayHandler) upload(fsm *segment.FileSegmentMeta) error {
 	go t.storageOrderCompleteQueryLoop(fsm, fragStripCompleteChanMap, cancelFunc)
 	log.V(1).Info(fmt.Sprintf("%d frag strip upload task started", n))
 	wg.Wait()
-	log.Info("file storage complete", "cost", time.Since(startTime))
+	cost := time.Since(startTime)
+	log.Info("file storage complete", "cost", cost)
+	EmitStep(t, "file storage complete", "cost", cost)
 	return nil
 }
 
@@ -380,17 +386,9 @@ func (t *SimpleRelayHandler) createFileStorageOrderIfAbsent(fsm *segment.FileSeg
 				for j := 0; j < math.MaxInt; j++ {
 					blockHash, err := t.Declaration(fsm, true)
 					if err != nil {
+						panicIfCantContinue(err)
 						log.Error(err, "[Declaration] failed, try again later")
-						if strings.Contains(err.Error(), "rpc err: connection failed") {
-							log.V(1).Info("reconnect chain")
-							err = cessc.ReconnectRPC() //FIXME: the cess sdk make the state false once catch rpc error
-							if err != nil {
-								log.Error(err, "[ReconnectRPC] failed, try again later")
-								time.Sleep(1500 * time.Millisecond)
-							}
-						} else {
-							time.Sleep(1500 * time.Millisecond)
-						}
+						time.Sleep(1500 * time.Millisecond)
 						continue
 					}
 					t.log.Info("new file storage order", "blockHash", blockHash)
@@ -406,4 +404,10 @@ func (t *SimpleRelayHandler) createFileStorageOrderIfAbsent(fsm *segment.FileSeg
 		return &storageOrder, nil
 	}
 	panic("may not be happen here")
+}
+
+func panicIfCantContinue(err error) {
+	if strings.Contains(err.Error(), "wasm `unreachable` instruction executed") {
+		panic(err)
+	}
 }

@@ -1,11 +1,9 @@
 package app
 
 import (
-	"context"
 	"math/rand"
 	"vdo-cmps/config"
 	"vdo-cmps/pkg/cesstash"
-	"vdo-cmps/pkg/cesstash/shim/cesssc"
 	"vdo-cmps/pkg/log"
 
 	"os"
@@ -13,44 +11,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/centrifuge/go-substrate-rpc-client/v4/signature"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
 	"github.com/vedhavyas/go-subkey/v2"
-
-	cgs "github.com/CESSProject/cess-go-sdk"
-	cespat "github.com/CESSProject/cess-go-sdk/core/pattern"
-	cessdk "github.com/CESSProject/cess-go-sdk/core/sdk"
 )
 
 type CmpsApp struct {
-	gin         *gin.Engine
-	config      *config.AppConfig
-	keyringPair *signature.KeyringPair
-	cessc       cessdk.SDK
-	cessstash   *cesstash.CessStash
-}
-
-func buildCesscc(cfg *config.CessSetting) (cessdk.SDK, error) {
-	cc, err := cgs.New(
-		context.Background(),
-		cgs.Name("client"),
-		cgs.ConnectRpcAddrs([]string{cfg.RpcUrl}),
-		cgs.Mnemonic(cfg.SecretPhrase),
-		cgs.TransactionTimeout(time.Second*10),
-	)
-	if err != nil {
-		return nil, err
-	}
-	go fetchStorageMinerLoop(cc)
-	return cc, nil
-}
-
-func buildCesssc(cfg *config.CessfscSetting, workDir string) (*cesssc.CessStorageClient, error) {
-	return cesssc.New(cfg.P2pPort, workDir, cfg.BootAddrs, logger.WithName("cstorec"))
+	gin     *gin.Engine
+	config  *config.AppConfig
+	cestash *cesstash.CessStash
 }
 
 func setupGin(app *CmpsApp) error {
@@ -88,41 +60,19 @@ func addRoute(app *CmpsApp) {
 }
 
 func buildCmpsApp(config *config.AppConfig) (*CmpsApp, error) {
-	kp, err := signature.KeyringPairFromSecret(config.Cess.SecretPhrase, 0)
-	if err != nil {
-		return nil, err
-	}
-
-	workDir := config.App.WorkDir
-	if _, err := os.Stat(workDir); os.IsNotExist(err) {
-		err = os.Mkdir(workDir, 0755)
-		if err != nil {
-			return nil, errors.Wrap(err, "make CMPS work dir error")
-		}
-	}
-
-	c, err := buildCesscc(config.Cess)
-	if err != nil {
-		return nil, errors.Wrap(err, "build cess chain client error")
-	}
-	sc, err := buildCesssc(config.Cessfsc, workDir)
-	if err != nil {
-		return nil, errors.Wrap(err, "build cess storage client error")
-	}
-	fs, err := cesstash.NewFileStash(workDir, config.Cess.SecretPhrase, c, sc)
+	cesh, err := cesstash.New(config)
 	if err != nil {
 		return nil, errors.Wrap(err, "build filestash error")
 	}
-	fs.SetStashWhenUpload(true)
+	cesh.SetStashWhenUpload(true)
 
 	app := &CmpsApp{
-		config:      config,
-		keyringPair: &kp,
-		cessc:       c,
-		cessstash:   fs,
+		config:  config,
+		cestash: cesh,
 	}
 
 	setupGin(app)
+	go fetchStorageMinerLoop(cesh)
 	return app, nil
 }
 
@@ -172,15 +122,12 @@ func signalHandle() {
 	}
 }
 
-func fetchStorageMinerLoop(cessc cessdk.SDK) {
+func fetchStorageMinerLoop(cesh *cesstash.CessStash) {
 	for {
-		list, err := cessc.QueryAllSminerAccount()
+		list, err := cesh.CesSdkAdapter().QueryAllSminerAccount()
 		if err != nil {
 			logger.Error(err, "")
-			if errors.Is(cespat.ERR_RPC_CONNECTION, err) {
-				time.Sleep(3 * time.Second)
-				cessc.ReconnectRPC()
-			}
+			time.Sleep(3 * time.Second)
 			continue
 		}
 		logger.Info("active fetch miners", "minersCount", len(list))

@@ -1,9 +1,11 @@
 package cesstash
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 
+	"vdo-cmps/config"
 	"vdo-cmps/pkg/cesstash/shim/cesssc"
 	"vdo-cmps/pkg/log"
 	"vdo-cmps/pkg/utils/hash"
@@ -12,9 +14,9 @@ import (
 	"path/filepath"
 	"time"
 
+	cgs "github.com/CESSProject/cess-go-sdk"
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
-	cessdk "github.com/CESSProject/cess-go-sdk/core/sdk"
-	cesskeyring "github.com/CESSProject/go-keyring"
+	"github.com/centrifuge/go-substrate-rpc-client/v4/signature"
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 )
@@ -28,8 +30,8 @@ func init() {
 type CessStash struct {
 	fileStashDir    string
 	chunksDir       string
-	keyring         *cesskeyring.KeyRing
-	cessc           cessdk.SDK
+	keyringPair     signature.KeyringPair
+	cessc           CesSdkAdapter
 	cessfsc         *cesssc.CessStorageClient
 	log             logr.Logger
 	stashWhenUpload bool
@@ -51,35 +53,61 @@ var Must _must
 type _must struct {
 }
 
-func (t _must) NewFileStash(parentDir string, secretPhrase string, cessc cessdk.SDK, cessfsc *cesssc.CessStorageClient) *CessStash {
-	fs, err := NewFileStash(parentDir, secretPhrase, cessc, cessfsc)
+func (t _must) New(config *config.AppConfig) *CessStash {
+	fs, err := New(config)
 	if err != nil {
 		panic(err)
 	}
 	return fs
 }
 
-func NewFileStash(parentDir string, secretPhrase string, cessc cessdk.SDK, cessfsc *cesssc.CessStorageClient) (*CessStash, error) {
-	keyring, err := cesskeyring.FromURI(secretPhrase, cesskeyring.NetSubstrate{})
+func New(config *config.AppConfig) (*CessStash, error) {
+	cessCfg := config.Cess
+	kp, err := signature.KeyringPairFromSecret(cessCfg.SecretPhrase, cessCfg.ChainId)
 	if err != nil {
 		return nil, err
 	}
 
-	fsd := filepath.Join(parentDir, _FileStashDirName)
+	workDir := config.App.WorkDir
+	if _, err := os.Stat(workDir); os.IsNotExist(err) {
+		err = os.Mkdir(workDir, 0755)
+		if err != nil {
+			return nil, errors.Wrap(err, "make CMPS work dir error")
+		}
+	}
+	fsd := filepath.Join(workDir, _FileStashDirName)
 	if err := os.MkdirAll(fsd, 0755); err != nil {
 		return nil, err
 	}
-	ckd := filepath.Join(parentDir, _FileStashDirName, ".chunks")
+	ckd := filepath.Join(workDir, _FileStashDirName, ".chunks")
 	if err := os.MkdirAll(ckd, 0755); err != nil {
 		return nil, err
 	}
+
+	cc, err := cgs.New(
+		context.Background(),
+		cgs.Name("client"),
+		cgs.ConnectRpcAddrs([]string{cessCfg.RpcUrl}),
+		cgs.Mnemonic(cessCfg.SecretPhrase),
+		cgs.TransactionTimeout(time.Second*10),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	cesfsCfg := config.Cessfsc
+	cesfsc, err := cesssc.New(cesfsCfg.P2pPort, workDir, cesfsCfg.BootAddrs, logger.WithName("cstorec"))
+	if err != nil {
+		return nil, err
+	}
+
 	fsth := &CessStash{
 		log:                 logger,
 		fileStashDir:        fsd,
 		chunksDir:           ckd,
-		keyring:             keyring,
-		cessc:               cessc,
-		cessfsc:             cessfsc,
+		keyringPair:         kp,
+		cessc:               CesSdkAdapter{cc},
+		cessfsc:             cesfsc,
 		relayHandlers:       make(map[FileHash]RelayHandler),
 		relayHandlerPutChan: make(chan RelayHandler),
 	}
@@ -94,9 +122,6 @@ func startCleanCompleteRelayHandlerTask(fsth *CessStash) {
 				if rh.IsProcessing() {
 					continue
 				}
-				if rh.ReRelayIfAbort() {
-					continue
-				}
 				if rh.CanClean() {
 					rh.Close()
 					delete(fsth.relayHandlers, k)
@@ -108,6 +133,8 @@ func startCleanCompleteRelayHandlerTask(fsth *CessStash) {
 		}
 	}()
 }
+
+func (t *CessStash) CesSdkAdapter() *CesSdkAdapter { return &t.cessc }
 
 func (t *CessStash) Dir() string { return t.fileStashDir }
 

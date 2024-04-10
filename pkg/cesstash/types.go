@@ -121,7 +121,6 @@ type RelayHandler interface {
 	State() *RelayState
 	IsProcessing() bool
 	CanClean() bool
-	ReRelayIfAbort() bool
 	Close()
 }
 

@@ -57,7 +57,7 @@ func (n CmpsApp) CreateBucket(c *gin.Context) {
 		return
 	}
 
-	txHash, err := n.cessc.CreateBucket((*accountId)[:], DEFAULT_BUCKET)
+	txHash, err := n.cestash.CesSdkAdapter().CreateBucket(accountId[:], DEFAULT_BUCKET)
 	if err != nil {
 		resp.Error(c, err)
 		return
@@ -85,7 +85,7 @@ func (n CmpsApp) UploadFile(c *gin.Context) {
 		return
 	}
 
-	rh, err := n.cessstash.Upload(cesstash.UploadReq{FileHeader: fileh, AccountId: *accountId, BucketName: DEFAULT_BUCKET, ForceUploadIfPending: req.ForceUploadIfPending})
+	rh, err := n.cestash.Upload(cesstash.UploadReq{FileHeader: fileh, AccountId: *accountId, BucketName: DEFAULT_BUCKET, ForceUploadIfPending: req.ForceUploadIfPending})
 	if err != nil {
 		resp.Error(c, err)
 		return
@@ -124,7 +124,7 @@ func (n CmpsApp) ListenerUploadProgress(c *gin.Context) {
 		resp.Error(c, err)
 		return
 	}
-	rh, err := n.cessstash.GetRelayHandler(*fh)
+	rh, err := n.cestash.GetRelayHandler(*fh)
 	if err != nil {
 		resp.ErrorWithHttpStatus(c, err, 404)
 		return
@@ -193,7 +193,7 @@ func (n CmpsApp) DebugUploadProgress(c *gin.Context) {
 	})
 	ws.WriteMessage(websocket.TextMessage, []byte("waiting for file upload..."))
 	for !wsClosed {
-		rh := <-n.cessstash.AnyRelayHandler()
+		rh := <-n.cestash.AnyRelayHandler()
 		pushMsgForRelayHandler(ws, rh, closeSignal)
 	}
 	logger.V(1).Info("debug upload progress websocket listener finish")
@@ -205,7 +205,7 @@ func (n CmpsApp) GetFileState(c *gin.Context) {
 		resp.Error(c, err)
 		return
 	}
-	fmeta, err := n.cessc.QueryFileMetadata(req.CessFileId)
+	fmeta, err := n.cestash.CesSdkAdapter().QueryFileMetadata(req.CessFileId)
 	if err != nil {
 		if errors.Is(err, cesspat.ERR_RPC_EMPTY_VALUE) {
 			resp.ErrorWithHttpStatus(c, err, 404)
@@ -234,7 +234,7 @@ func (n CmpsApp) DownloadFile(c *gin.Context) {
 	skipStash := c.Query("skipStash") != ""
 
 	if !skipStash {
-		fbi, err := n.cessstash.FileInfoById(req.CessFileId)
+		fbi, err := n.cestash.FileInfoById(req.CessFileId)
 		if fbi != nil && fbi.Size > 0 {
 			responseForFile(c, fbi.FilePath, fbi.OriginName)
 			return
@@ -243,7 +243,7 @@ func (n CmpsApp) DownloadFile(c *gin.Context) {
 		}
 	}
 
-	fbi, err := n.cessstash.DownloadFile(req.CessFileId)
+	fbi, err := n.cestash.DownloadFile(req.CessFileId)
 	if err != nil {
 		logger.Error(err, "filestash.DownloadFile()", "cessFileId", req.CessFileId)
 		resp.Error(c, err)
@@ -266,12 +266,12 @@ func (n CmpsApp) DeleteFile(c *gin.Context) {
 		return
 	}
 
-	txHash, _, err := n.cessc.DeleteFile((*accountId)[:], []string{req.CessFileId})
+	txHash, _, err := n.cestash.CesSdkAdapter().DeleteFile((*accountId)[:], []string{req.CessFileId})
 	if err != nil {
 		resp.Error(c, err)
 		return
 	}
-	n.cessstash.RemoveFile(req.CessFileId)
+	n.cestash.RemoveFile(req.CessFileId)
 	resp.Ok(c, txHash)
 }
 
@@ -301,5 +301,5 @@ func (n CmpsApp) ListStoredMiners(c *gin.Context) {
 		}
 	}
 	resp.Ok(c, list)
-	n.cessc.QueryAllSminerAccount()
+	n.cestash.CesSdkAdapter().QueryAllSminerAccount()
 }
