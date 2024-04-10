@@ -1,4 +1,4 @@
-package cesstash
+package cestash
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"vdo-cmps/pkg/cesstash/shim"
-	"vdo-cmps/pkg/cesstash/shim/segment"
+	"vdo-cmps/pkg/cestash/shim"
+	"vdo-cmps/pkg/cestash/shim/segment"
 
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
 	"github.com/go-logr/logr"
@@ -30,7 +30,7 @@ type SimpleRelayHandler struct {
 	forceUploadIfPending bool
 }
 
-func NewSimpleRelayHandler(fileStash *CessStash, fsm *segment.FileSegmentMeta, uploadReq UploadReq) SimpleRelayHandler {
+func NewSimpleRelayHandler(fileStash *Cestash, fsm *segment.FileSegmentMeta, uploadReq UploadReq) SimpleRelayHandler {
 	base := SimpleRelayHandlerBase{
 		id:         *fsm.RootHash,
 		state:      RelayState{FileHash: fsm.RootHash.Hex()},
@@ -90,10 +90,10 @@ func (t *SimpleRelayHandler) ReRelayIfAbort() bool {
 }
 
 func (t *SimpleRelayHandler) createBucketIfAbsent() (string, error) {
-	_, err := t.fileStash.cessc.QueryBucketInfo(t.accountId[:], t.bucketName)
+	_, err := t.fileStash.cesa.QueryBucketInfo(t.accountId[:], t.bucketName)
 	if err != nil {
 		t.log.Error(err, "get bucket info error")
-		txHash, err := t.fileStash.cessc.CreateBucket(t.accountId[:], t.bucketName)
+		txHash, err := t.fileStash.cesa.CreateBucket(t.accountId[:], t.bucketName)
 		if err != nil {
 			t.log.Error(err, "create bucket failed", "bucketName", t.bucketName)
 		}
@@ -115,7 +115,7 @@ func (t *SimpleRelayHandler) upload(fsm *segment.FileSegmentMeta) error {
 		return errors.New("the fsm fragments empty")
 	}
 
-	cessfsc := t.fileStash.cessfsc
+	cessfsc := t.fileStash.cesc
 	log := t.log
 	cessFileId := fsm.RootHash.Hex()
 	frag2dArray := fsm.ToFragSeg2dArray()
@@ -264,7 +264,7 @@ func (t *SimpleRelayHandler) upload(fsm *segment.FileSegmentMeta) error {
 }
 
 func (t *SimpleRelayHandler) queryStorageOrderUntilSuccess(cessFileId string) *cesspat.StorageOrder {
-	cessc := t.fileStash.cessc
+	cessc := t.fileStash.cesa
 	log := t.log
 	for i := 0; i < math.MaxInt; i++ {
 		storageOrder, err := cessc.QueryStorageOrder(cessFileId)
@@ -283,7 +283,7 @@ func (t *SimpleRelayHandler) queryStorageOrderUntilSuccess(cessFileId string) *c
 }
 
 func (t *SimpleRelayHandler) queryMinerInfoUntilSuccess(minerAccountId []byte) *cesspat.MinerInfo {
-	cessc := t.fileStash.cessc
+	cessc := t.fileStash.cesa
 	log := t.log
 	for j := 0; j < math.MaxInt; j++ {
 		minerInfo, err := cessc.QueryStorageMiner(minerAccountId)
@@ -338,7 +338,7 @@ func (t *SimpleRelayHandler) storageOrderCompleteQueryLoop(fsm *segment.FileSegm
 
 func (t *SimpleRelayHandler) onlyRecordFileOwnershipIfOnChain(fsm *segment.FileSegmentMeta) bool {
 	cessFileId := fsm.RootHash.Hex()
-	cessc := t.fileStash.cessc
+	cessc := t.fileStash.cesa
 	log := t.log
 	for i := 0; i < math.MaxInt; i++ {
 		fmd, err := cessc.QueryFileMetadata(cessFileId)
@@ -349,7 +349,7 @@ func (t *SimpleRelayHandler) onlyRecordFileOwnershipIfOnChain(fsm *segment.FileS
 				continue
 			}
 			// new file to store
-			log.Info("new file to store", "uploador", subkey.SS58Encode(t.accountId[:], 11330)) //TODO: use configed value
+			log.Info("new file to store", "uploador", subkey.SS58Encode(t.accountId[:], t.fileStash.chainId))
 			return false
 		} else {
 			log.Info("the file has stored on chain")
@@ -376,7 +376,7 @@ func (t *SimpleRelayHandler) onlyRecordFileOwnershipIfOnChain(fsm *segment.FileS
 
 func (t *SimpleRelayHandler) createFileStorageOrderIfAbsent(fsm *segment.FileSegmentMeta) (*cesspat.StorageOrder, *string) {
 	cessFileId := fsm.RootHash.Hex()
-	cessc := t.fileStash.cessc
+	cessc := t.fileStash.cesa
 	log := t.log
 	for i := 0; i < math.MaxInt; i++ {
 		storageOrder, err := cessc.QueryStorageOrder(cessFileId)

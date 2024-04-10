@@ -1,4 +1,4 @@
-package cesstash
+package cestash
 
 //TODO: to complete the Unit Test
 // import (

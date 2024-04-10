@@ -1,4 +1,4 @@
-package cesstash
+package cestash
 
 import (
 	"fmt"
@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-	"vdo-cmps/pkg/cesstash/shim"
-	"vdo-cmps/pkg/cesstash/shim/cesssc"
+	"vdo-cmps/pkg/cestash/shim"
+	"vdo-cmps/pkg/cestash/shim/cesssc"
 	"vdo-cmps/pkg/utils/erasure"
 	"vdo-cmps/pkg/utils/hash"
 
@@ -22,7 +22,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-func (t *CessStash) downloadFile(cessFileId string, fmeta *cesspat.FileMetadata) (*FileBriefInfo, error) {
+func (t *Cestash) downloadFile(cessFileId string, fmeta *cesspat.FileMetadata) (*FileBriefInfo, error) {
 	targetFile, err := t.createEmptyCessFile(cessFileId)
 	if err != nil {
 		return nil, err
@@ -34,7 +34,7 @@ func (t *CessStash) downloadFile(cessFileId string, fmeta *cesspat.FileMetadata)
 		return nil, errors.Wrap(err, "make download tmp dir error")
 	}
 
-	dm, err := newDownloader(cessFileId, fmeta, tmpDownloadDir, targetFile, t.log, t.cessc, t.cessfsc)
+	dm, err := newDownloader(cessFileId, fmeta, tmpDownloadDir, targetFile, t.log, t.cesa, t.cesc)
 	if err != nil {
 		return nil, err
 	}

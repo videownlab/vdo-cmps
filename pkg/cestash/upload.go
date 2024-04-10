@@ -1,4 +1,4 @@
-package cesstash
+package cestash
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"vdo-cmps/pkg/cesstash/shim/segment"
+	"vdo-cmps/pkg/cestash/shim/segment"
 
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
 	"github.com/centrifuge/go-substrate-rpc-client/v4/types"
@@ -16,7 +16,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-func (t *CessStash) createFsm(file FileHeader, outputDir string) (*segment.FileSegmentMeta, error) {
+func (t *Cestash) createFsm(file FileHeader, outputDir string) (*segment.FileSegmentMeta, error) {
 	toUploadFile, err := file.Open()
 	if err != nil {
 		return nil, err
@@ -61,12 +61,12 @@ func (t *CessStash) createFsm(file FileHeader, outputDir string) (*segment.FileS
 	return fsm, nil
 }
 
-func checkHasAuthorizeToMe(ct *CessStash, acc types.AccountID) error {
-	authTargets, err := ct.cessc.QueryAuthorizedAccounts(acc[:])
+func checkHasAuthorizeToMe(ct *Cestash, acc types.AccountID) error {
+	authTargets, err := ct.cesa.QueryAuthorizedAccounts(acc[:])
 	if err != nil && err.Error() != cesspat.ERR_Empty {
 		return errors.New("must to authorize to use your space first")
 	}
-	ka := ct.cessc.GetSignatureAcc()
+	ka := ct.cesa.GetSignatureAcc()
 	for _, at := range authTargets {
 		if ka == at {
 			return nil
@@ -75,7 +75,7 @@ func checkHasAuthorizeToMe(ct *CessStash, acc types.AccountID) error {
 	return errors.Errorf("please authorize to %s to use your space", ka)
 }
 
-func (t *CessStash) Upload(req UploadReq) (RelayHandler, error) {
+func (t *Cestash) Upload(req UploadReq) (RelayHandler, error) {
 	if err := checkHasAuthorizeToMe(t, req.AccountId); err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ func (t *CessStash) Upload(req UploadReq) (RelayHandler, error) {
 	return rh, nil
 }
 
-func (t *CessStash) GetRelayHandler(fileHash FileHash) (RelayHandler, error) {
+func (t *Cestash) GetRelayHandler(fileHash FileHash) (RelayHandler, error) {
 	rh, ok := t.relayHandlers[fileHash]
 	if !ok {
 		return nil, errors.New("relay handler not exists for upload")
@@ -118,6 +118,6 @@ func (t *CessStash) GetRelayHandler(fileHash FileHash) (RelayHandler, error) {
 	return rh, nil
 }
 
-func (t *CessStash) AnyRelayHandler() <-chan RelayHandler {
+func (t *Cestash) AnyRelayHandler() <-chan RelayHandler {
 	return t.relayHandlerPutChan
 }

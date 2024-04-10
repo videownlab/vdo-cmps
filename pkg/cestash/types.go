@@ -1,11 +1,11 @@
-package cesstash
+package cestash
 
 import (
 	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
-	"vdo-cmps/pkg/cesstash/shim/segment"
+	"vdo-cmps/pkg/cestash/shim/segment"
 	"vdo-cmps/pkg/utils/hash"
 
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
@@ -144,7 +144,7 @@ type SimpleRelayHandlerBase struct {
 	log        logr.Logger
 	stateMutex sync.RWMutex
 	stepChan   chan HandleStep
-	fileStash  *CessStash
+	fileStash  *Cestash
 	fsm        *segment.FileSegmentMeta
 	accountId  types.AccountID
 	bucketName string
@@ -237,7 +237,7 @@ func (t *SimpleRelayHandlerBase) Declaration(fsm *segment.FileSegmentMeta, actua
 	} else {
 		EmitStep(t, "upload declaring: only record the relationship")
 	}
-	return t.fileStash.cessc.UploadDeclaration(fsm.RootHash.Hex(), dstSegs, user, uint64(fsm.InputSize))
+	return t.fileStash.cesa.UploadDeclaration(fsm.RootHash.Hex(), dstSegs, user, uint64(fsm.InputSize))
 }
 
 func toCessFileHashType(hash *hash.H256) cesspat.FileHash {

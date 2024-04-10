@@ -1,4 +1,4 @@
-package cesstash
+package cestash
 
 import (
 	"errors"

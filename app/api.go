@@ -3,7 +3,7 @@ package app
 import (
 	"math/rand"
 	"vdo-cmps/app/resp"
-	"vdo-cmps/pkg/cesstash"
+	"vdo-cmps/pkg/cestash"
 	"vdo-cmps/pkg/utils/cessaddr"
 
 	"fmt"
@@ -79,13 +79,13 @@ func (n CmpsApp) UploadFile(c *gin.Context) {
 		return
 	}
 
-	fileh, err := cesstash.MultipartFile(req.File)
+	fileh, err := cestash.MultipartFile(req.File)
 	if err != nil {
 		resp.Error(c, err)
 		return
 	}
 
-	rh, err := n.cestash.Upload(cesstash.UploadReq{FileHeader: fileh, AccountId: *accountId, BucketName: DEFAULT_BUCKET, ForceUploadIfPending: req.ForceUploadIfPending})
+	rh, err := n.cestash.Upload(cestash.UploadReq{FileHeader: fileh, AccountId: *accountId, BucketName: DEFAULT_BUCKET, ForceUploadIfPending: req.ForceUploadIfPending})
 	if err != nil {
 		resp.Error(c, err)
 		return
@@ -147,7 +147,7 @@ func (n CmpsApp) ListenerUploadProgress(c *gin.Context) {
 	logger.V(1).Info("upload progress listener finish", "uploadId", f.UploadId)
 }
 
-func pushMsgForRelayHandler(ws *websocket.Conn, rh cesstash.RelayHandler, closeSignal <-chan bool) {
+func pushMsgForRelayHandler(ws *websocket.Conn, rh cestash.RelayHandler, closeSignal <-chan bool) {
 	err := ws.WriteJSON(LupMsg{LMT_STATE, rh.State()})
 	if err != nil {
 		logger.Error(err, "write relay handler state to websocket error")

@@ -3,7 +3,7 @@ package app
 import (
 	"math/rand"
 	"vdo-cmps/config"
-	"vdo-cmps/pkg/cesstash"
+	"vdo-cmps/pkg/cestash"
 	"vdo-cmps/pkg/log"
 
 	"os"
@@ -22,7 +22,7 @@ import (
 type CmpsApp struct {
 	gin     *gin.Engine
 	config  *config.AppConfig
-	cestash *cesstash.CessStash
+	cestash *cestash.Cestash
 }
 
 func setupGin(app *CmpsApp) error {
@@ -60,7 +60,7 @@ func addRoute(app *CmpsApp) {
 }
 
 func buildCmpsApp(config *config.AppConfig) (*CmpsApp, error) {
-	cesh, err := cesstash.New(config)
+	cesh, err := cestash.New(config)
 	if err != nil {
 		return nil, errors.Wrap(err, "build filestash error")
 	}
@@ -122,7 +122,7 @@ func signalHandle() {
 	}
 }
 
-func fetchStorageMinerLoop(cesh *cesstash.CessStash) {
+func fetchStorageMinerLoop(cesh *cestash.Cestash) {
 	for {
 		list, err := cesh.CesSdkAdapter().QueryAllSminerAccount()
 		if err != nil {
@@ -133,7 +133,7 @@ func fetchStorageMinerLoop(cesh *cesstash.CessStash) {
 		logger.Info("active fetch miners", "minersCount", len(list))
 		miners := make([]string, len(list))
 		for i, a := range list {
-			miners[i] = subkey.SS58Encode(a.ToBytes(), 11330)
+			miners[i] = subkey.SS58Encode(a.ToBytes(), cesh.ChainId())
 		}
 		rand.Shuffle(len(miners), func(i, j int) { miners[i], miners[j] = miners[j], miners[i] })
 		_AllMiners = miners
