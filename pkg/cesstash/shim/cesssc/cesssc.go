@@ -17,7 +17,6 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/pkg/errors"
-	"golang.org/x/time/rate"
 
 	logging "github.com/ipfs/go-log"
 )
@@ -75,11 +74,14 @@ func (t PeerStatesCount) String() string {
 
 type CessStorageClient struct {
 	cp2p_core.P2P
-	ctx             context.Context
-	log             logr.Logger
-	peerStates      *sync.Map
-	maxPeerKeepSize int
-	peerFilter      PeerIdFilter
+	ctx                 context.Context
+	log                 logr.Logger
+	maxPeerKeepSize     int
+	peerFilter          PeerIdFilter
+	connectedPeersLock  sync.RWMutex
+	connectedPeers      map[peer.ID]struct{}
+	connectingPeersLock sync.RWMutex
+	connectingPeers     map[peer.ID]struct{}
 }
 
 func New(listenPort uint16, workDir string, configedBootAddrs []string, log logr.Logger) (*CessStorageClient, error) {
@@ -98,18 +100,20 @@ func New(listenPort uint16, workDir string, configedBootAddrs []string, log logr
 	if err != nil {
 		return nil, err
 	}
-	log.Info("local peer info", "peerId", c.ID(), "addrs", c.Addrs(), "rendezvousVersion", c.GetRendezvousVersion(), "dhtProtocolVersion", c.GetDhtProtocolVersion())
 
 	p2pm := CessStorageClient{
 		ctx:             ctx,
 		log:             log,
-		peerStates:      &sync.Map{},
 		maxPeerKeepSize: 200,
+		connectedPeers:  make(map[peer.ID]struct{}),
+		connectingPeers: make(map[peer.ID]struct{}),
 	}
 	p2pm.P2P = c
 	go func() {
 		p2pm.discoverPeersLoop()
 	}()
+	log.Info("local peer info", "peerId", c.ID(), "addrs", c.Addrs(), "rendezvousVersion", c.GetRendezvousVersion(),
+		"dhtProtocolVersion", c.GetDhtProtocolVersion(), "maxPeerKeepSize", p2pm.maxPeerKeepSize)
 	return &p2pm, nil
 }
 
@@ -124,42 +128,43 @@ func (n *CessStorageClient) discoverPeersLoop() {
 	routingDiscovery := routing.NewRoutingDiscovery(n.GetDHTable())
 	util.Advertise(n.ctx, routingDiscovery, rendezvous)
 
-	ticker := time.NewTicker(time.Second * 5)
-	defer ticker.Stop()
+	peerFindingTicker := time.NewTicker(time.Second * 5)
+	defer peerFindingTicker.Stop()
+	statePrintTicker := time.NewTicker(time.Minute * 15)
+	defer statePrintTicker.Stop()
 
-	printLimit := rate.NewLimiter(rate.Every(time.Minute), 1)
-
+	logger.Info("miner peers discovery starting")
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Info("peer discover loop exit")
 			return
-		case <-ticker.C:
-			if printLimit.Allow() {
-				countMap := n.countPeerStates()
-				n.log.Info("peer connect state", "counter", countMap.String())
-			}
-
-			connecteds := n.connectedPeersCount()
-			if connecteds >= n.maxPeerKeepSize {
+		case <-peerFindingTicker.C:
+			if n.ConnectedPeersCount() >= n.maxPeerKeepSize {
 				continue
 			}
-			peers, err := routingDiscovery.FindPeers(ctx, rendezvous)
+
+			// logger.V(2).Info("begin finding peers")
+			peerCh, err := routingDiscovery.FindPeers(ctx, rendezvous)
 			if err != nil {
 				logger.Error(err, "[FindPeers] error")
 				continue
 			}
-
-			for p := range peers {
+			for p := range peerCh {
 				if p.ID == n.ID() {
+					// logger.V(2).Info("ignore self peer")
 					continue
 				}
 				if n.peerFilter != nil {
 					if !n.peerFilter.IsAllowed(p.ID) {
+						logger.V(2).Info("peer is banned, ignored", "peerId", p.ID)
 						continue
 					}
 				}
 				n.handlePeerConnection(p)
 			}
+		case <-statePrintTicker.C:
+			logger.Info("peer connect state", "connected", n.ConnectedPeersCount(), "connecting", n.ConnectingPeersCount())
 		}
 	}
 }
@@ -169,82 +174,86 @@ func (n *CessStorageClient) FindPeer(id peer.ID) (pi peer.AddrInfo, err error) {
 }
 
 func (n *CessStorageClient) GetConnectedPeers() []peer.ID {
-	peerIds := make([]peer.ID, 0, 32)
-	n.peerStates.Range(func(k any, v any) bool {
-		peerId, ok := k.(peer.ID)
-		if ok {
-			state, ok := v.(PeerState)
-			if ok && state == Connected {
-				peerIds = append(peerIds, peerId)
-			}
-		}
-		return true
-	})
+	n.connectedPeersLock.RLock()
+	defer n.connectedPeersLock.RUnlock()
+	peerIds := make([]peer.ID, 0, len(n.connectedPeers))
+	for pid := range n.connectedPeers {
+		peerIds = append(peerIds, pid)
+	}
 	return peerIds
 }
 
 func (n *CessStorageClient) ReportNotAvailable(peerId peer.ID) {
+	n.connectedPeersLock.Lock()
+	defer n.connectedPeersLock.Unlock()
+	delete(n.connectedPeers, peerId)
 	n.log.V(1).Info("peer is reported not available", "peerId", peerId)
-	n.peerStates.Delete(peerId)
 }
 
 func (n *CessStorageClient) Context() context.Context {
 	return n.ctx
 }
 
-func (n *CessStorageClient) countPeerStates() PeerStatesCount {
-	countMap := make(PeerStatesCount)
-	n.peerStates.Range(func(_, v any) bool {
-		state, ok := v.(PeerState)
-		if ok {
-			countMap[state]++
-		}
-		return true
-	})
-	return countMap
+func (n *CessStorageClient) ConnectedPeersCount() int {
+	n.connectedPeersLock.RLock()
+	defer n.connectedPeersLock.RUnlock()
+	return len(n.connectedPeers)
 }
 
-func (n *CessStorageClient) connectedPeersCount() int {
-	cnt := 0
-	n.peerStates.Range(func(_, v any) bool {
-		state, ok := v.(PeerState)
-		if ok && state == Connected {
-			cnt++
-		}
-		return true
-	})
-	return cnt
+func (n *CessStorageClient) ConnectingPeersCount() int {
+	n.connectingPeersLock.RLock()
+	defer n.connectingPeersLock.RUnlock()
+	return len(n.connectingPeers)
 }
 
 func (n *CessStorageClient) handlePeerConnection(pi peer.AddrInfo) {
-	peerState, _ := n.peerStates.LoadOrStore(pi.ID, NotConnected)
-	switch peerState.(PeerState) {
-	case Connected:
+	// logger := n.log
+	if n.isPeerConnecting(pi.ID) {
+		// logger.V(2).Info("igonre the connecting peer", "peerId", pi.ID)
 		return
-	case NotConnected:
-	case Connecting:
-		// n.log.V(2).Info("Skipping node as we're already trying to connect", "peer", pi.ID)
-		return
-	case FailedConnecting:
-		// n.log.V(2).Info("We tried to connect previously but couldn't establish a connection, try again", "peer", pi.ID)
 	}
-
 	go func() {
 		ctx := n.ctx
-		// logger := n.log
-		n.peerStates.Store(pi.ID, Connecting)
+		n.togglePeerConnecting(pi.ID, true)
 		if n.Network().Connectedness(pi.ID) != network.Connected {
 			_, err := n.Network().DialPeer(ctx, pi.ID)
 			if err != nil {
 				// logger.V(2).Info("[DialPeer] error", "error", err)
-				n.peerStates.Store(pi.ID, FailedConnecting)
+				n.togglePeerConnecting(pi.ID, false)
 				return
 			}
-			n.peerStates.Store(pi.ID, Connected)
 			// logger.V(1).Info("peer connected", "peer", pi)
 		}
-		n.peerStates.Store(pi.ID, Connected)
+		n.togglePeerConnected(pi.ID, true)
+		n.togglePeerConnecting(pi.ID, false)
 	}()
+}
+
+func (n *CessStorageClient) isPeerConnecting(peerId peer.ID) bool {
+	n.connectingPeersLock.RLock()
+	defer n.connectingPeersLock.RUnlock()
+	_, connecting := n.connectingPeers[peerId]
+	return connecting
+}
+
+func (n *CessStorageClient) togglePeerConnecting(peerId peer.ID, connecting bool) {
+	n.connectingPeersLock.Lock()
+	defer n.connectingPeersLock.Unlock()
+	if connecting {
+		n.connectingPeers[peerId] = struct{}{}
+	} else {
+		delete(n.connectingPeers, peerId)
+	}
+}
+
+func (n *CessStorageClient) togglePeerConnected(peerId peer.ID, connected bool) {
+	n.connectedPeersLock.Lock()
+	defer n.connectedPeersLock.Unlock()
+	if connected {
+		n.connectedPeers[peerId] = struct{}{}
+	} else {
+		delete(n.connectedPeers, peerId)
+	}
 }
 
 func figureProtocolPrefix(bootNodeAddrs []string) string {
