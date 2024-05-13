@@ -3,8 +3,9 @@ App:
   WorkDir: ./.workdata
 
 Cess:
-  RpcUrl: wss://testnet-rpc0.cess.cloud/ws/
-  SecretPhrase :
+  RpcUrl: ws://221.122.79.5:9944/
+  SecretPhrase: "hire useless peanut engine amused fuel wet toddler list party salmon dream"
+  ChainId: 11330
 
 Cessfsc:
   BootAddrs:

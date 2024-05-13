@@ -2,3 +2,4 @@
 .test-tmp
 vdo-cmps
 .vscode
+*.private

@@ -1,24 +1,23 @@
-package cesstash
+package cestash
 
 import (
 	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
-	"vdo-cmps/pkg/cesstash/shim/segment"
+	"vdo-cmps/pkg/cestash/shim/segment"
 	"vdo-cmps/pkg/utils/hash"
 
-	"github.com/AstaFrode/go-libp2p/core/peer"
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
 	"github.com/centrifuge/go-substrate-rpc-client/v4/types"
 	"github.com/go-logr/logr"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 type UploadReq struct {
-	FileHeader           FileHeader
-	AccountId            types.AccountID
-	BucketName           string
-	ForceUploadIfPending bool
+	FileHeader FileHeader
+	AccountId  types.AccountID
+	BucketName string
 }
 
 type PeerAccountPair struct {
@@ -72,13 +71,11 @@ func (t HandleStep) MarshalJSON() ([]byte, error) {
 }
 
 type RelayState struct {
-	FileHash          string       `json:"fileHash,omitempty"`
-	Miners            []string     `json:"miners,omitempty"`
-	Steps             []HandleStep `json:"steps,omitempty"`
-	CompleteTime      time.Time    `json:"completeTime,omitempty"`
-	Aborted           bool         `json:"aborted,omitempty"`
-	retryRounds       int
-	storedButTxFailed bool
+	FileHash     string       `json:"fileHash,omitempty"`
+	Miners       []string     `json:"miners,omitempty"`
+	Steps        []HandleStep `json:"steps,omitempty"`
+	CompleteTime time.Time    `json:"completeTime,omitempty"`
+	Aborted      bool         `json:"aborted,omitempty"`
 }
 
 func (t *RelayState) pushStep(step HandleStep) {
@@ -121,7 +118,6 @@ type RelayHandler interface {
 	State() *RelayState
 	IsProcessing() bool
 	CanClean() bool
-	ReRelayIfAbort() bool
 	Close()
 }
 
@@ -145,7 +141,7 @@ type SimpleRelayHandlerBase struct {
 	log        logr.Logger
 	stateMutex sync.RWMutex
 	stepChan   chan HandleStep
-	fileStash  *CessStash
+	fileStash  *Cestash
 	fsm        *segment.FileSegmentMeta
 	accountId  types.AccountID
 	bucketName string
@@ -238,7 +234,7 @@ func (t *SimpleRelayHandlerBase) Declaration(fsm *segment.FileSegmentMeta, actua
 	} else {
 		EmitStep(t, "upload declaring: only record the relationship")
 	}
-	return t.fileStash.cessc.UploadDeclaration(fsm.RootHash.Hex(), dstSegs, user, uint64(fsm.InputSize))
+	return t.fileStash.cesa.UploadDeclaration(fsm.RootHash.Hex(), dstSegs, user, uint64(fsm.InputSize))
 }
 
 func toCessFileHashType(hash *hash.H256) cesspat.FileHash {

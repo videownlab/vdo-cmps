@@ -43,7 +43,7 @@ while getopts ":hp" opt; do
 done
 
 MIRROR=
-IMG_ID="videown/vdo-cmps:latest"
+IMG_ID="videownlab/vdo-cmps:latest"
 
 if [ -n "$MIRROR" ]; then
     IMG_ID="$MIRROR/$IMG_ID"

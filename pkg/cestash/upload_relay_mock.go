@@ -1,9 +1,9 @@
-package cesstash
+package cestash
 
 import (
 	"math/rand"
 	"time"
-	"vdo-cmps/pkg/cesstash/shim/segment"
+	"vdo-cmps/pkg/cestash/shim/segment"
 
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
 	"github.com/pkg/errors"
@@ -17,7 +17,7 @@ type MockedRelayHandler struct {
 	*SimpleRelayHandlerBase
 }
 
-func NewMockedRelayHandler(fileStash *CessStash, fsm *segment.FileSegmentMeta, uploadReq UploadReq) MockedRelayHandler {
+func NewMockedRelayHandler(fileStash *Cestash, fsm *segment.FileSegmentMeta, uploadReq UploadReq) MockedRelayHandler {
 	base := SimpleRelayHandlerBase{
 		id:         *fsm.RootHash,
 		state:      RelayState{FileHash: fsm.RootHash.Hex()},
@@ -30,31 +30,13 @@ func NewMockedRelayHandler(fileStash *CessStash, fsm *segment.FileSegmentMeta, u
 	return MockedRelayHandler{&base}
 }
 
-// ReRelayIfAbort implements RelayHandler.
-func (t *MockedRelayHandler) ReRelayIfAbort() bool {
-	s := t.State()
-	if !s.IsAbort() || s.storedButTxFailed {
-		return false
-	}
-	//TODO: no-brain retry now, to be fix it!
-	t.log.Info("new round relay()", "prevRetryRounds", s.retryRounds, "prevCompleteTime", s.CompleteTime)
-
-	t.stateMutex.Lock()
-	s.retryRounds++
-	s.CompleteTime = time.Time{}
-	t.stateMutex.Unlock()
-
-	t.Relay()
-	return true
-}
-
 func (t *MockedRelayHandler) Relay() (retErr error) {
 	defer func() {
 		if retErr != nil {
 			EmitStep(t, _ABORT_STEP, retErr)
 		} else {
 			EmitStep(t, _FINISH_STEP)
-			cleanChunks(t.fsm.OutputDir)
+			cleanChunks(t.fsm.HomeDir())
 		}
 	}()
 
@@ -63,7 +45,7 @@ func (t *MockedRelayHandler) Relay() (retErr error) {
 
 	EmitStep(t, "uploading")
 	t.log.V(1).Info("the fsm", "fsm", t.fsm)
-	cessc := t.fileStash.cessc
+	cessc := t.fileStash.cesa
 	cessFileId := t.fsm.RootHash.Hex()
 	storageOrder, err := cessc.QueryStorageOrder(cessFileId)
 	if err != nil {

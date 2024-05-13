@@ -21,6 +21,7 @@ type AppSetting struct {
 type CessSetting struct {
 	RpcUrl       string
 	SecretPhrase string
+	ChainId      uint16
 }
 
 type CessfscSetting struct {

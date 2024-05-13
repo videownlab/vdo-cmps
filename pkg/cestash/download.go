@@ -1,4 +1,4 @@
-package cesstash
+package cestash
 
 import (
 	"fmt"
@@ -8,22 +8,21 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-	"vdo-cmps/pkg/cesstash/shim"
-	"vdo-cmps/pkg/cesstash/shim/cesssc"
+	"vdo-cmps/pkg/cestash/shim"
+	"vdo-cmps/pkg/cestash/shim/cesssc"
 	"vdo-cmps/pkg/utils/erasure"
 	"vdo-cmps/pkg/utils/hash"
 
-	"github.com/AstaFrode/go-libp2p/core/peer"
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
-	cessdk "github.com/CESSProject/cess-go-sdk/core/sdk"
 	"github.com/centrifuge/go-substrate-rpc-client/v4/types"
 	"github.com/go-logr/logr"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"golang.org/x/exp/slices"
 
 	"github.com/pkg/errors"
 )
 
-func (t *CessStash) downloadFile(cessFileId string, fmeta *cesspat.FileMetadata) (*FileBriefInfo, error) {
+func (t *Cestash) downloadFile(cessFileId string, fmeta *cesspat.FileMetadata) (*FileBriefInfo, error) {
 	targetFile, err := t.createEmptyCessFile(cessFileId)
 	if err != nil {
 		return nil, err
@@ -35,7 +34,7 @@ func (t *CessStash) downloadFile(cessFileId string, fmeta *cesspat.FileMetadata)
 		return nil, errors.Wrap(err, "make download tmp dir error")
 	}
 
-	dm, err := newDownloader(cessFileId, fmeta, tmpDownloadDir, targetFile, t.log, t.cessc, t.cessfsc)
+	dm, err := newDownloader(cessFileId, fmeta, tmpDownloadDir, targetFile, t.log, t.cesa, t.cesc)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +71,7 @@ type fragmentGot struct {
 }
 
 type Downloader struct {
-	cessc          cessdk.SDK
+	cessc          CesSdkAdapter
 	cessfsc        *cesssc.CessStorageClient
 	log            logr.Logger
 	cessFileId     string
@@ -96,7 +95,7 @@ func newDownloader(
 	fmeta *cesspat.FileMetadata,
 	downloadDir string, targetFile *os.File,
 	log logr.Logger,
-	cessc cessdk.SDK,
+	cessc CesSdkAdapter,
 	cessfsc *cesssc.CessStorageClient) (*Downloader, error) {
 
 	log = log.WithValues("cessFileId", cessFileId)
@@ -198,7 +197,7 @@ func (t *Downloader) downloadFragsByPeer(peerId peer.ID, fragInfos []FragmentInf
 	cessfsc := t.cessfsc
 	rounds := 0
 	for {
-		addrInfo, e := cessfsc.DHTFindPeer(peerId.String())
+		addrInfo, e := cessfsc.FindPeer(peerId)
 		if e != nil {
 			log.Error(e, "finding address error")
 			rounds++
@@ -206,7 +205,7 @@ func (t *Downloader) downloadFragsByPeer(peerId peer.ID, fragInfos []FragmentInf
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		if err := cessfsc.Connect(cessfsc.GetCtxQueryFromCtxCancel(), addrInfo); err != nil {
+		if err := cessfsc.Connect(cessfsc.Context(), addrInfo); err != nil {
 			log.Error(err, "connect peer error")
 		}
 		log.V(1).Info("peer connected ", "address", addrInfo)

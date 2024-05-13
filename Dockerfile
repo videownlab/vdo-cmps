@@ -17,7 +17,7 @@ COPY . /opt/target/
 RUN cd /opt/target/ \
   && make
 
-FROM golang:1.20-alpine3.19
+FROM alpine:3.19
 WORKDIR /opt/vdo-cmps
 COPY --from=builder /opt/target/vdo-cmps ./
 COPY --from=builder /opt/target/static ./static

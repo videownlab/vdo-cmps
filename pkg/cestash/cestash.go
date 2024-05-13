@@ -1,10 +1,12 @@
-package cesstash
+package cestash
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 
-	"vdo-cmps/pkg/cesstash/shim/cesssc"
+	"vdo-cmps/config"
+	"vdo-cmps/pkg/cestash/shim/cesssc"
 	"vdo-cmps/pkg/log"
 	"vdo-cmps/pkg/utils/hash"
 
@@ -12,9 +14,9 @@ import (
 	"path/filepath"
 	"time"
 
+	cgs "github.com/CESSProject/cess-go-sdk"
 	cesspat "github.com/CESSProject/cess-go-sdk/core/pattern"
-	cessdk "github.com/CESSProject/cess-go-sdk/core/sdk"
-	cesskeyring "github.com/CESSProject/go-keyring"
+	"github.com/centrifuge/go-substrate-rpc-client/v4/signature"
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 )
@@ -22,15 +24,16 @@ import (
 var logger logr.Logger
 
 func init() {
-	logger = log.Logger.WithName("cesstash")
+	logger = log.Logger.WithName("Cestash")
 }
 
-type CessStash struct {
+type Cestash struct {
 	fileStashDir    string
 	chunksDir       string
-	keyring         *cesskeyring.KeyRing
-	cessc           cessdk.SDK
-	cessfsc         *cesssc.CessStorageClient
+	keyringPair     signature.KeyringPair
+	chainId         uint16
+	cesa            CesSdkAdapter
+	cesc            *cesssc.CessStorageClient
 	log             logr.Logger
 	stashWhenUpload bool
 
@@ -51,35 +54,62 @@ var Must _must
 type _must struct {
 }
 
-func (t _must) NewFileStash(parentDir string, secretPhrase string, cessc cessdk.SDK, cessfsc *cesssc.CessStorageClient) *CessStash {
-	fs, err := NewFileStash(parentDir, secretPhrase, cessc, cessfsc)
+func (t _must) New(config *config.AppConfig) *Cestash {
+	fs, err := New(config)
 	if err != nil {
 		panic(err)
 	}
 	return fs
 }
 
-func NewFileStash(parentDir string, secretPhrase string, cessc cessdk.SDK, cessfsc *cesssc.CessStorageClient) (*CessStash, error) {
-	keyring, err := cesskeyring.FromURI(secretPhrase, cesskeyring.NetSubstrate{})
+func New(config *config.AppConfig) (*Cestash, error) {
+	cesCfg := config.Cess
+	kp, err := signature.KeyringPairFromSecret(cesCfg.SecretPhrase, cesCfg.ChainId)
 	if err != nil {
 		return nil, err
 	}
 
-	fsd := filepath.Join(parentDir, _FileStashDirName)
+	workDir := config.App.WorkDir
+	if _, err := os.Stat(workDir); os.IsNotExist(err) {
+		err = os.Mkdir(workDir, 0755)
+		if err != nil {
+			return nil, errors.Wrap(err, "make CMPS work dir error")
+		}
+	}
+	fsd := filepath.Join(workDir, _FileStashDirName)
 	if err := os.MkdirAll(fsd, 0755); err != nil {
 		return nil, err
 	}
-	ckd := filepath.Join(parentDir, _FileStashDirName, ".chunks")
+	ckd := filepath.Join(workDir, _FileStashDirName, ".chunks")
 	if err := os.MkdirAll(ckd, 0755); err != nil {
 		return nil, err
 	}
-	fsth := &CessStash{
+
+	cc, err := cgs.New(
+		context.Background(),
+		cgs.Name("client"),
+		cgs.ConnectRpcAddrs([]string{cesCfg.RpcUrl}),
+		cgs.Mnemonic(cesCfg.SecretPhrase),
+		cgs.TransactionTimeout(time.Second*10),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	cesfsCfg := config.Cessfsc
+	cesfsc, err := cesssc.New(cesfsCfg.P2pPort, workDir, cesfsCfg.BootAddrs, logger.WithName("cstorec"))
+	if err != nil {
+		return nil, err
+	}
+
+	fsth := &Cestash{
 		log:                 logger,
 		fileStashDir:        fsd,
 		chunksDir:           ckd,
-		keyring:             keyring,
-		cessc:               cessc,
-		cessfsc:             cessfsc,
+		keyringPair:         kp,
+		chainId:             cesCfg.ChainId,
+		cesa:                CesSdkAdapter{cc},
+		cesc:                cesfsc,
 		relayHandlers:       make(map[FileHash]RelayHandler),
 		relayHandlerPutChan: make(chan RelayHandler),
 	}
@@ -87,14 +117,11 @@ func NewFileStash(parentDir string, secretPhrase string, cessc cessdk.SDK, cessf
 	return fsth, nil
 }
 
-func startCleanCompleteRelayHandlerTask(fsth *CessStash) {
+func startCleanCompleteRelayHandlerTask(fsth *Cestash) {
 	go func() {
 		for {
 			for k, rh := range fsth.relayHandlers {
 				if rh.IsProcessing() {
-					continue
-				}
-				if rh.ReRelayIfAbort() {
 					continue
 				}
 				if rh.CanClean() {
@@ -109,9 +136,13 @@ func startCleanCompleteRelayHandlerTask(fsth *CessStash) {
 	}()
 }
 
-func (t *CessStash) Dir() string { return t.fileStashDir }
+func (t *Cestash) ChainId() uint16 { return t.chainId }
 
-func (t *CessStash) SetStashWhenUpload(value bool) { t.stashWhenUpload = value }
+func (t *Cestash) CesSdkAdapter() *CesSdkAdapter { return &t.cesa }
+
+func (t *Cestash) Dir() string { return t.fileStashDir }
+
+func (t *Cestash) SetStashWhenUpload(value bool) { t.stashWhenUpload = value }
 
 type FileBriefInfo struct {
 	OriginName string
@@ -127,7 +158,7 @@ type SimpleFileMeta struct {
 	OriginName string `json:"originName"`
 }
 
-func (t *CessStash) FileInfoById(cessFileId string) (*FileBriefInfo, error) {
+func (t *Cestash) FileInfoById(cessFileId string) (*FileBriefInfo, error) {
 	dataFilename := filepath.Join(t.fileStashDir, cessFileId, _DataFilename)
 	fstat, err := os.Stat(dataFilename)
 	if err != nil {
@@ -146,7 +177,7 @@ func (t *CessStash) FileInfoById(cessFileId string) (*FileBriefInfo, error) {
 	return &r, err
 }
 
-func (t *CessStash) loadSimpleFileMeta(cessFileId string) (*SimpleFileMeta, error) {
+func (t *Cestash) loadSimpleFileMeta(cessFileId string) (*SimpleFileMeta, error) {
 	metabs, err := os.ReadFile(filepath.Join(t.fileStashDir, cessFileId, _MetaFilename))
 	if err != nil {
 		return nil, err
@@ -159,7 +190,7 @@ func (t *CessStash) loadSimpleFileMeta(cessFileId string) (*SimpleFileMeta, erro
 	return &sfm, nil
 }
 
-func (t *CessStash) storeSimpleFileMeta(sfm *SimpleFileMeta) error {
+func (t *Cestash) storeSimpleFileMeta(sfm *SimpleFileMeta) error {
 	if sfm.CessFileId == "" {
 		return errors.New("fileHash field must not be empty")
 	}
@@ -174,7 +205,7 @@ func (t *CessStash) storeSimpleFileMeta(sfm *SimpleFileMeta) error {
 	return nil
 }
 
-func (t *CessStash) ensureCessFileDir(dirname string) (string, error) {
+func (t *Cestash) ensureCessFileDir(dirname string) (string, error) {
 	fileHashDir := filepath.Join(t.fileStashDir, dirname)
 	if _, err := os.Stat(fileHashDir); os.IsNotExist(err) {
 		err = os.Mkdir(fileHashDir, 0755)
@@ -185,7 +216,7 @@ func (t *CessStash) ensureCessFileDir(dirname string) (string, error) {
 	return fileHashDir, nil
 }
 
-func (t *CessStash) createEmptyCessFile(cessFileId string) (*os.File, error) {
+func (t *Cestash) createEmptyCessFile(cessFileId string) (*os.File, error) {
 	dir, err := t.ensureCessFileDir(cessFileId)
 	if err != nil {
 		return nil, err
@@ -193,8 +224,8 @@ func (t *CessStash) createEmptyCessFile(cessFileId string) (*os.File, error) {
 	return os.Create(filepath.Join(dir, "data"))
 }
 
-func (t *CessStash) DownloadFile(cessFileId string) (*FileBriefInfo, error) {
-	fmeta, err := t.cessc.QueryFileMetadata(cessFileId)
+func (t *Cestash) DownloadFile(cessFileId string) (*FileBriefInfo, error) {
+	fmeta, err := t.cesa.QueryFileMetadata(cessFileId)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +238,7 @@ func (t *CessStash) DownloadFile(cessFileId string) (*FileBriefInfo, error) {
 	return t.downloadFile(cessFileId, &fmeta)
 }
 
-func (t *CessStash) RemoveFile(cessFileId string) error {
+func (t *Cestash) RemoveFile(cessFileId string) error {
 	fileHashDir := filepath.Join(t.fileStashDir, cessFileId)
 	if _, err := os.Stat(fileHashDir); os.IsNotExist(err) {
 		return nil
@@ -215,7 +246,7 @@ func (t *CessStash) RemoveFile(cessFileId string) error {
 	return os.RemoveAll(fileHashDir)
 }
 
-func (t *CessStash) stashFile(cessFileId string, src io.Reader, originName string) error {
+func (t *Cestash) stashFile(cessFileId string, src io.Reader, originName string) error {
 	fhdf, err := t.createEmptyCessFile(cessFileId)
 	if err != nil {
 		return err
