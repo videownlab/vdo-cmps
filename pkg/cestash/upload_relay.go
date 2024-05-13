@@ -26,8 +26,6 @@ var (
 
 type SimpleRelayHandler struct {
 	*SimpleRelayHandlerBase
-
-	forceUploadIfPending bool
 }
 
 func NewSimpleRelayHandler(fileStash *Cestash, fsm *segment.FileSegmentMeta, uploadReq UploadReq) SimpleRelayHandler {
@@ -40,9 +38,7 @@ func NewSimpleRelayHandler(fileStash *Cestash, fsm *segment.FileSegmentMeta, upl
 		accountId:  uploadReq.AccountId,
 		bucketName: uploadReq.BucketName,
 	}
-	drh := SimpleRelayHandler{
-		forceUploadIfPending: uploadReq.ForceUploadIfPending,
-	}
+	drh := SimpleRelayHandler{}
 	drh.SimpleRelayHandlerBase = &base
 	return drh
 }
@@ -70,23 +66,6 @@ func (t *SimpleRelayHandler) Relay() (retErr error) {
 	EmitStep(t, "uploading")
 	t.log.V(1).Info("the fsm", "fsm", t.fsm)
 	return t.upload(t.fsm)
-}
-
-func (t *SimpleRelayHandler) ReRelayIfAbort() bool {
-	s := t.State()
-	if !s.IsAbort() || s.storedButTxFailed {
-		return false
-	}
-	//TODO: no-brain retry now, to be fix it!
-	t.log.Info("new round relay()", "prevRetryRounds", s.retryRounds, "prevCompleteTime", s.CompleteTime)
-
-	t.stateMutex.Lock()
-	s.retryRounds++
-	s.CompleteTime = time.Time{}
-	t.stateMutex.Unlock()
-
-	t.Relay()
-	return true
 }
 
 func (t *SimpleRelayHandler) createBucketIfAbsent() (string, error) {
@@ -213,21 +192,22 @@ func (t *SimpleRelayHandler) upload(fsm *segment.FileSegmentMeta) error {
 				nestLog.V(1).Info("pick a new miner")
 				for j, frag := range fragStrip {
 					nestLog := nestLog.WithValues("frag", frag, "segIndex", j)
-					retry := 0
-					for {
-						nestLog.V(1).Info("frag uploading", "retry", retry)
-						EmitStep(t, "frag strip uploading", "fragStripIndex", fragStripIndex, "minerPeer", minerPeerId)
-						if err := cessfsc.WriteFileAction(minerPeerId, cessFileId, frag.FilePath()); err != nil {
-							nestLog.Error(err, "[WriteFileAction] error, change to next miner")
-							cessfsc.ReportNotAvailable(minerPeerId)
-						} else {
-							nestLog.V(1).Info("frag uploaded, wait for complete")
-							EmitStep(t, "frag strip uploading", "fragStripIndex", fragStripIndex, "minerPeer", minerPeerId)
-							lastUploadedTime = time.Now()
-						}
+					msg := fmt.Sprintf("frag[%d,%d] uploading", fragStripIndex, j)
+					nestLog.V(1).Info(msg)
+					EmitStep(t, msg)
+					if err := cessfsc.WriteFileAction(minerPeerId, cessFileId, frag.FilePath()); err != nil {
+						nestLog.Error(err, "[WriteFileAction] error, change to next miner")
+						cessfsc.ReportNotAvailable(minerPeerId)
 						goto LOOP_0
 					}
+					msg = fmt.Sprintf("frag[%d,%d] uploaded", fragStripIndex, j)
+					nestLog.V(1).Info(msg)
+					EmitStep(t, msg)
 				}
+				msg := fmt.Sprintf("frag-strip:%d uploaded, wait for complete", fragStripIndex)
+				nestLog.V(1).Info(msg)
+				EmitStep(t, msg)
+				lastUploadedTime = time.Now()
 			}
 		}
 	}
@@ -241,8 +221,9 @@ func (t *SimpleRelayHandler) upload(fsm *segment.FileSegmentMeta) error {
 		if m := hasAlreadyFinished(i); m != nil {
 			peerId, err := shim.ToPeerId(&m.PeerId)
 			if err == nil {
-				log.V(1).Info("frag strip has already completed, ignore upload", "fragStripIndex", i, "minerPeer", peerId)
-				EmitStep(t, "frag strip has already completed, ignore upload", "fragStripIndex", i, "minerPeer", peerId)
+				msg := fmt.Sprintf("frag-strip:%d has already completed, ignore upload", i)
+				log.V(1).Info(msg, "minerPeer", peerId)
+				EmitStep(t, msg)
 				usedMiners[peerId] = struct{}{}
 				continue
 			}
@@ -257,9 +238,11 @@ func (t *SimpleRelayHandler) upload(fsm *segment.FileSegmentMeta) error {
 	go t.storageOrderCompleteQueryLoop(fsm, fragStripCompleteChanMap, cancelFunc)
 	log.V(1).Info(fmt.Sprintf("%d frag strip upload task started", n))
 	wg.Wait()
+
 	cost := time.Since(startTime)
-	log.Info("file storage complete", "cost", cost)
-	EmitStep(t, "file storage complete", "cost", cost)
+	msg := fmt.Sprintf("file storage complete, cost: %s", cost)
+	log.Info(msg, "cost", cost)
+	EmitStep(t, msg)
 	return nil
 }
 

@@ -43,12 +43,14 @@ func configedCors() gin.HandlerFunc {
 
 func addRoute(app *CmpsApp) {
 	g := app.gin
+	g.MaxMultipartMemory = 2 << 30 // 2GiB
 	g.POST("/bucket", app.CreateBucket)
 	g.GET("/file-state/:fileHash", app.GetFileState)
 	g.GET("/stored-miners/:fileHash", app.ListStoredMiners)
 	g.PUT("/file", app.UploadFile)
 	g.GET("/file/:fileHash", app.DownloadFile)
 	g.DELETE("/file", app.DeleteFile)
+	g.PUT("/relay", app.RelayFile)
 	g.GET("/upload-progress/:uploadId", app.ListenerUploadProgress)
 	g.GET("/upload-progress1", app.DebugUploadProgress)
 

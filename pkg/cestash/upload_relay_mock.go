@@ -30,24 +30,6 @@ func NewMockedRelayHandler(fileStash *Cestash, fsm *segment.FileSegmentMeta, upl
 	return MockedRelayHandler{&base}
 }
 
-// ReRelayIfAbort implements RelayHandler.
-func (t *MockedRelayHandler) ReRelayIfAbort() bool {
-	s := t.State()
-	if !s.IsAbort() || s.storedButTxFailed {
-		return false
-	}
-	//TODO: no-brain retry now, to be fix it!
-	t.log.Info("new round relay()", "prevRetryRounds", s.retryRounds, "prevCompleteTime", s.CompleteTime)
-
-	t.stateMutex.Lock()
-	s.retryRounds++
-	s.CompleteTime = time.Time{}
-	t.stateMutex.Unlock()
-
-	t.Relay()
-	return true
-}
-
 func (t *MockedRelayHandler) Relay() (retErr error) {
 	defer func() {
 		if retErr != nil {

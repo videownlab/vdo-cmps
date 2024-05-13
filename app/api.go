@@ -29,9 +29,13 @@ type (
 	}
 
 	FilePutReq struct {
-		WalletAddress        string                `form:"walletAddress" binding:"required"`
-		File                 *multipart.FileHeader `form:"file" binding:"required"`
-		ForceUploadIfPending bool                  `form:"force"`
+		WalletAddress string                `form:"walletAddress" binding:"required"`
+		File          *multipart.FileHeader `form:"file" binding:"required"`
+	}
+
+	FileRelayReq struct {
+		WalletAddress string `form:"walletAddress" binding:"required"`
+		CessFileId    string `json:"cessFileId" form:"cessFileId" uri:"cessFileId" binding:"required"`
 	}
 
 	FileDeleteReq struct {
@@ -85,7 +89,40 @@ func (n CmpsApp) UploadFile(c *gin.Context) {
 		return
 	}
 
-	rh, err := n.cestash.Upload(cestash.UploadReq{FileHeader: fileh, AccountId: *accountId, BucketName: DEFAULT_BUCKET, ForceUploadIfPending: req.ForceUploadIfPending})
+	rh, err := n.cestash.Upload(cestash.UploadReq{FileHeader: fileh, AccountId: *accountId, BucketName: DEFAULT_BUCKET})
+	if err != nil {
+		resp.Error(c, err)
+		return
+	}
+	result := map[string]any{"uploadId": rh.Id()}
+	resp.Ok(c, result)
+}
+
+func (n CmpsApp) RelayFile(c *gin.Context) {
+	var req FileRelayReq
+	if err := c.ShouldBind(&req); err != nil {
+		resp.Error(c, err)
+		return
+	}
+
+	accountId, err := cessaddr.ToAccountIdByCessAddress(req.WalletAddress)
+	if err != nil {
+		resp.Error(c, err)
+		return
+	}
+
+	fi, err := n.cestash.FileInfoById(req.CessFileId)
+	if err != nil {
+		resp.Error(c, errors.Wrap(err, "the specific file not exist on the cache, please upload it"))
+		return
+	}
+	fh, err := cestash.NormalFile(fi.FilePath)
+	if err != nil {
+		resp.Error(c, err)
+		return
+	}
+
+	rh, err := n.cestash.Upload(cestash.UploadReq{FileHeader: fh, AccountId: *accountId, BucketName: DEFAULT_BUCKET})
 	if err != nil {
 		resp.Error(c, err)
 		return

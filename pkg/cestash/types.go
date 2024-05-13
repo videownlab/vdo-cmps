@@ -15,10 +15,9 @@ import (
 )
 
 type UploadReq struct {
-	FileHeader           FileHeader
-	AccountId            types.AccountID
-	BucketName           string
-	ForceUploadIfPending bool
+	FileHeader FileHeader
+	AccountId  types.AccountID
+	BucketName string
 }
 
 type PeerAccountPair struct {
@@ -72,13 +71,11 @@ func (t HandleStep) MarshalJSON() ([]byte, error) {
 }
 
 type RelayState struct {
-	FileHash          string       `json:"fileHash,omitempty"`
-	Miners            []string     `json:"miners,omitempty"`
-	Steps             []HandleStep `json:"steps,omitempty"`
-	CompleteTime      time.Time    `json:"completeTime,omitempty"`
-	Aborted           bool         `json:"aborted,omitempty"`
-	retryRounds       int
-	storedButTxFailed bool
+	FileHash     string       `json:"fileHash,omitempty"`
+	Miners       []string     `json:"miners,omitempty"`
+	Steps        []HandleStep `json:"steps,omitempty"`
+	CompleteTime time.Time    `json:"completeTime,omitempty"`
+	Aborted      bool         `json:"aborted,omitempty"`
 }
 
 func (t *RelayState) pushStep(step HandleStep) {
